@@ -359,6 +359,78 @@ degrade gracefully: the agent is told up front and must say so in its
 summary — the coverage matrix keys off `used_tools`, which is recorded
 only for tools that actually executed.
 
+## Phase 4: operations (implemented)
+
+### Report formats — markdown is the source of truth, HTML is generated
+Every run writes `artifacts/report-<stamp>.md` AND a self-contained
+`report-<stamp>.html` (no JavaScript, no external assets, strict escaping —
+open it on an air-gapped workstation). The HTML renderer accepts exactly the
+markdown subset the report emits; anything else (tool output, model text
+with HTML in it) is escaped, never passed through.
+
+### Cost governance (`budget:`)
+```yaml
+budget:
+  max_total_tokens: 120000   # ~ estimate (chars/4)
+  per_role: {reporter: 40000}
+  on_exhausted: stop         # or: downgrade
+```
+Token counts are estimates tracked per role and shown in every report's
+footer. `stop` halts the run and writes a partial report that says so.
+`downgrade` switches the role that hit the limit to the local backend and
+lets it finish (nothing cheaper than local remains — a local role raises
+instead).
+
+### Drift detection (scheduled scans)
+Each run stores a normalized findings snapshot
+(`artifacts/state/findings-<target>.json`); the next run diffs against it by
+a stable fingerprint of (title, target, CWE) — re-worded evidence or a
+re-rated severity does not masquerade as a new finding. The report gains a
+"Drift Since Last Run" section; "resolved" is worded honestly: absent from
+this run, which is either fixed or a check that didn't run.
+
+### Review queue (`python -m redteam.review`)
+```bash
+python -m redteam.review --findings artifacts/findings-*.json --reviews artifacts/reviews.json   # list w/ fingerprints
+python -m redteam.review --reviews artifacts/reviews.json --set <fingerprint> --status false_positive --note "not reproducible" --reviewer alice
+```
+Statuses: `confirmed | false_positive | accepted_risk | needs_info`. Decisions
+are keyed by the same fingerprint as drift/tickets, survive re-runs, and are
+applied at report time with the reviewer's name and note printed next to the
+status — a review is a human statement, never invented by the system.
+
+### Ticket export (`python -m redteam.tickets`)
+```bash
+python -m redteam.tickets --findings artifacts/findings-<stamp>.json --format jira --out tickets.csv      # or: linear
+```
+CSV (Jira/Linear import) or Markdown. Every ticket carries a `dedup:<fingerprint>`
+label so a scheduled re-run deduplicates in the ticketing system instead of
+creating copies. Descriptions pass the same redaction net as reports.
+
+### Engagement model (`python main.py --engagement <file>`)
+A customer YAML binding the what/who/when of authorization:
+```yaml
+engagement:
+  id: ACME-2026-01
+  customer: ACME Corp
+  operator: alice
+  authorization_letter: letters/acme-signed.pdf
+  window: {start: 2026-10-01, end: 2026-10-31}
+  scope: {allow_domains: [acme-example.com], allow_cidrs: ["203.0.113.0/24"], allow_private: false}
+```
+Fail-closed: the letter must exist and be non-empty (its SHA-256 goes into
+the audit log + `artifacts/engagement.json`), the window must cover today,
+and an engagement with no scope authorizes nothing. The engagement replaces
+the config scope for that run.
+
+### Local-model viability (CPU-only hosts)
+See `lab/MODELS.md`: the agent system prompt uses a compact one-line-per-tool
+schema list (~2.1k tokens vs ~6.3k for pretty-printed JSON — enforcement
+still validates against the real schemas), `max_tokens` bounds each
+generation, 16k-context Ollama variants avoid silent prompt truncation, and
+the two-backend Router lets noisy roles run a smaller model. Budget, drift,
+review and tickets work identically on hosted and local setups.
+
 ## Testing
 
 ```bash
@@ -439,9 +511,22 @@ Seventeen suites, all fully offline (no target traffic, no API keys):
   incl. `..` traversal, the kill-switch-only local guard, coverage honesty
   for sections 13/15/24/12 keyed off scanners that ran, and pipeline
   wiring end-to-end with a scripted model + scripted runner.
+- `tests/test_egress.py` — the process-level DNS/connect/sendto firewall:
+  allowlist build-out (scope domains/CIDRs, LLM + intel endpoints), IPv4/6
+  obfuscations, hostname reverse-lookup traps, identity-safe
+  install/uninstall handover, and wiring in both pipelines.
+- `tests/test_phase3_integration.py` — config validation for the five
+  Phase-3 modules (fail-closed), conditional tool registration, coverage
+  upgrades only when tools actually ran.
+- `tests/test_phase4.py` — budget enforcement + Router downgrade semantics,
+  drift fingerprints/compare/render, ticket export formats + dedup keys,
+  review queue application, HTML escaping rules, engagement fail-closed
+  loading (letter/window/scope), and the orchestrator's run_end artifacts
+  (HTML report, snapshot, usage/drift in the audit event).
 
-CI runs all seventeen on every push/PR touching this directory
-(`.github/workflows/redteam-agents-ci.yml`).
+CI runs all twenty-six suites on every push/PR touching this directory
+(`.github/workflows/redteam-agents-ci.yml`); a second workflow dogfoods
+repo mode weekly when LLM credentials are configured.
 
 ## Legal / ethics
 
@@ -475,6 +560,18 @@ Works now:
   osv-scanner dependency CVEs (offline-capable), checkov IaC and a syft
   SBOM over a local checkout — deterministic verdicts in code, root
   allowlist containment, zero target traffic
+- **Phase 3 modules** (each operator-configured, offline by default): K8s
+  image/audit/lint, cloud posture reports + public bucket exposure checks,
+  AD path analysis (collector is operator-gated), AI endpoint probes, APK
+  manifest/badging/decompiled-secret audits with no network tools
+- **Docker-free vulnerable lab** (`lab/vulnserver.py`, loopback-only) with
+  24 ground-truth items for honest recall measurement in the eval harness
+- **Phase 4 operations**: single-file HTML reports; per-run/per-role token
+  budgets (`stop` or cost `downgrade` to the local tier); drift detection
+  across scheduled runs (stable findings fingerprints); human review queue
+  applied at report time; Jira/Linear ticket export with dedup keys;
+  engagement model binding customer + hashed authorization letter + window
+  + scope, fail-closed; repo-mode GitHub Action
 - Graceful degradation when an external tool is missing
 - Eval harness with record/replay cassettes + offline CI suite
 
@@ -486,6 +583,7 @@ Deliberately NOT in the MVP (roadmap):
   behind `safety.business_logic` + per-burst approval — Phase 2.4)
 - Password-reset/OTP stepping with interactive operator confirmation
   (account-enumeration diffing IS automated — `account_enum` — Phase 2.3)
-- Active Directory / internal network attack paths
-- Remaining Phase 3 modules: cloud posture, container/K8s, AD, AI/LLM red
-  team, mobile — independent and read-only by design (repo/SCA shipped)
+- Active Directory collection is opt-in AND operator-gated (analysis is
+  read-only over an existing BloodHound report; see Phase 3 ADConfig)
+- Remote approval via push notification; check marketplace honoring a
+  review process (plugin trusts are local and operator-installed)

@@ -241,21 +241,35 @@ a lab-validated detection test in the golden suite.
 
 ## Phase 4 — Productization (ongoing from Phase 1, completes after 3)
 
-- **Engagement model**: customers → engagements → scope files → authorization
-  letter attached; scope changes are signed-off events in the audit log
-- **Review queue**: triage UI for findings (confirm/false-positive/accept
-  risk); human decisions feed back as few-shot examples into triage prompts
-- **Remote approval**: confirm active requests from phone (the exploit-stage
-  gate becomes a push notification, not a terminal prompt)
-- **Scheduling & CI**: cron runs with drift detection (new findings vs last
-  run), GitHub Action for repo mode, ticket export (Jira/Linear) with
-  dedup keys
-- **Report formats**: HTML/PDF with CVSS v4 vectors, EPSS/KEV enrichment,
-  executive + technical splits, per-catalog-section coverage page
-- **Cost governance**: per-run token budgets, per-role model downgrades on
-  budget pressure, caching of repeated tool output, monthly cost-per-engagement
-  dashboard
-- **Check marketplace**: signed plugin packs; review process; versioning
+**Status: core shipped** (commit `eecd55b`). Per-item:
+
+- ✅ **Engagement model**: `--engagement <file>` — customer / operator /
+  hashed authorization letter (SHA-256 into audit + artifact) / inclusive
+  assessment window / scope replacement. Fail-closed on missing letter,
+  empty letter, closed window, empty scope.
+- ✅ **Review queue** (CLI, not UI): `python -m redteam.review` —
+  confirm/false_positive/accepted_risk/needs_info keyed by the stable
+  finding fingerprint; applied at report time with reviewer+note. Few-shot
+  feedback into triage prompts is NOT done (deferred).
+- ❌ **Remote approval** (push notification): not done. The exploit-stage
+  gate remains terminal prompts / `--yes`.
+- ✅ **Scheduling & CI**: drift detection across runs (stable fingerprint
+  over title|target|CWE, snapshots per target, honest "resolved" wording),
+  Jira/Linear ticket export with `dedup:<fp>` labels, repo-mode GitHub
+  Action (skips with a notice when no LLM credentials, never fakes).
+- ✅/❌ **Report formats**: self-contained HTML ✓ (single file, no JS,
+  strict escaping). PDF, CVSS v4 vectors (v3 only), EPSS/KEV enrichment
+  (KEV only via intel feeds), executive/technical split — not done.
+- ✅/❌ **Cost governance**: per-run + per-role ~token budgets with
+  stop|downgrade semantics, per-role usage in every report footer ✓.
+  Response caching and a monthly dashboard — not done.
+- ❌ **Check marketplace**: not done; plugins remain operator-installed
+  trusted local code (that is the documented trust model).
+
+Also shipped with Phase 4: local-model viability (`lab/MODELS.md` + compact
+one-line-per-tool system prompt, ~2.1k vs ~6.3k tokens, real-schema
+enforcement unchanged) — a CPU-only host now runs a full pipeline via a
+bigger-context model variant, bounded generation and per-role model split.
 
 ---
 
