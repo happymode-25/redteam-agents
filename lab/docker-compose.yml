@@ -1,0 +1,12 @@
+# Golden-target lab: deliberately vulnerable apps with known ground truth.
+# Used by eval/run_eval.py. NEVER expose these ports beyond localhost.
+#
+#   docker compose -f lab/docker-compose.yml up -d
+#
+# More targets to add later: DVWA (php/mysql) and NodeGoat — see eval/README.md.
+services:
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped

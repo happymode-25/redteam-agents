@@ -1,0 +1,38 @@
+# Golden targets with ground-truth findings for eval/run_eval.py.
+#
+# match: list of case-insensitive regexes; a recorded finding "hits" a truth
+# item if any regex matches its (title + target + evidence) blob.
+# TUNE THESE after your first recorded runs — start broad, tighten when you
+# see how findings are worded. Broad regexes inflate recall; missing regexes
+# hide misses. Both directions lie if left stale.
+
+targets:
+  juice-shop:
+    url: http://localhost:3000
+    scope:
+      allow_domains: [localhost]
+      allow_cidrs: []
+      allow_private: true            # lab only — loopback target
+      rate_limit_per_host_per_min: 120
+    truth:
+      - id: T1
+        title: "Score board exposed (unauthenticated access to admin view)"
+        match: ["score.?board"]
+      - id: T2
+        title: "Missing Content-Security-Policy header"
+        match: ["content.security.policy", "\\bcsp\\b"]
+      - id: T3
+        title: "Missing/wrong security headers (HSTS, X-Frame-Options, etc.)"
+        match: ["hsts", "strict.transport", "x.frame.options", "clickjacking"]
+      - id: T4
+        title: "Technology/server version disclosure"
+        match: ["technology disclosure", "x.powered.by", "server header"]
+      - id: T5
+        title: "Directory listing or exposed sensitive path"
+        match: ["directory listing", "\\.env", "\\.git", "backup"]
+      - id: T6
+        title: "Email auth records (SPF/DMARC) for lab domain"
+        match: ["spf", "dmarc"]
+      - id: T7
+        title: "Weak TLS configuration"
+        match: ["tls", "certificate"]

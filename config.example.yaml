@@ -1,0 +1,104 @@
+# redteam-agents configuration
+# Copy to config.yaml and edit. API keys are referenced by ENV VAR NAME only.
+
+llm:
+  # Reasoning-heavy roles: planning, exploit reasoning, reporting
+  hosted:
+    provider: openai_compatible        # or: anthropic
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    model: gpt-5.1                     # adjust to a model you have access to
+    timeout: 240
+
+  # Noisy triage / parsing: raw target data stays on this machine
+  local:
+    provider: openai_compatible
+    base_url: http://localhost:11434/v1   # Ollama OpenAI-compatible endpoint
+    api_key_env: OLLAMA_API_KEY           # unused by Ollama; placeholder
+    model: qwen3-coder:30b
+    timeout: 600
+
+  # Which backend each agent role uses: hosted | local
+  roles:
+    planner: hosted
+    recon: hosted
+    analyst: local
+    exploit: hosted
+    reporter: hosted
+
+scope:
+  # THE authorization boundary. Nothing outside these is ever touched.
+  allow_domains: []                    # e.g. ["example.com", "example.org"]
+  allow_cidrs: []                      # e.g. ["203.0.113.0/24"]
+  allow_subdomains: true               # allow *.allow_domains entries
+  allow_private: false                 # true only for authorized internal tests
+  rate_limit_per_host_per_min: 60      # 0 = unlimited (not recommended)
+
+safety:
+  max_agent_steps: 25                  # LLM turns per agent before forced stop
+  observation_max_chars: 6000          # tool output fed back to the model
+  require_confirmation_for_active: true  # prompt before each raw HTTP request
+  business_logic: false                 # Phase 2.4: keep false to skip workflow_step/
+                                         # race_burst entirely; when true each step and
+                                         # each burst STILL needs operator approval
+  artifacts_dir: ./artifacts
+  # Phase 0: audit trail is always on — audit.jsonl lands in artifacts_dir
+
+  # Fixture modes for the eval harness (see eval/README.md):
+  #   live   — normal operation, only counts calls
+  #   record — live AND stores every tool result / LLM response to cassette_dir
+  #   replay — offline: returns cassettes only; zero network, zero API cost
+  mode: live
+  cassette_dir: ./cassettes
+
+  # Subprocess runner for CLI tools (nmap/nuclei/httpx/subfinder/katana/ffuf):
+  #   local  — run directly on this host (requires tools on PATH)
+  #   docker — run in the hardened toolchain container (see docker/)
+  runner: local
+  docker_image: redteam-toolchain:latest
+  checks_dir: ./checks                   # custom check plugins (see README)
+
+identities:
+  # Phase 2: test identities for authenticated checks. Secrets are referenced
+  # by ENV VAR NAME only — values never appear in this file, findings,
+  # reports, or the audit log (a redaction pass scrubs them everywhere).
+  # Kinds: form (POST login), cookie (static session), bearer, apikey.
+  # - name: alice
+  #   kind: form
+  #   login_url: https://juice-shop.test/rest/user/login
+  #   username_env: ALICE_EMAIL
+  #   password_env: ALICE_PASSWORD
+  #   username_field: email
+  #   password_field: password
+  #   verify_url: https://juice-shop.test/rest/user/whoami
+  #   verify_marker: "alice"
+  #   logout_url: https://juice-shop.test/logout   # optional; enables the
+  #                                                # session_check logout probe
+  # - name: bob
+  #   kind: bearer
+  #   token_env: BOB_API_TOKEN
+  # Multi-identity testing (IDOR/BOLA) needs 2+ identities like these.
+
+nuclei:
+  # Template-scan policy — enforced in code, not by the prompt.
+  severity_floor: info         # lowest severity ever scanned; requests below
+                               # it fail loudly instead of silently widening
+  tags_include: []             # universe of template tags agents may request
+                               # (empty = all tags allowed)
+  tags_exclude: [dos, fuzz]    # never scanned. 'dos' is hard-coded on top of
+                               # this list too (catalog section 22 excluded)
+  template_dir: ""             # pinned templates git checkout, e.g.
+                               # ./nuclei-templates (pass -t to nuclei)
+  expected_commit: ""          # refuse to scan when HEAD != this reviewed
+                               # commit; leave empty = pin not enforced
+  update_policy: manual        # 'manual' only: update templates by reviewing
+                               # the diff, then update expected_commit
+
+intel:
+  # CVE intelligence (NVD + EPSS + CISA KEV) used by the cve_lookup tool.
+  # PRIVACY: these calls send target-derived product/version keywords to
+  # third-party APIs (nvd.nist.gov, api.first.org, cisa.gov). Set enabled:
+  # false when target fingerprints must not leave this machine.
+  enabled: true
+  nvd_api_key_env: ""                   # optional: env var holding an NVD API key
+  cache_ttl_hours: 24                   # local cache for KEV/EPSS feeds
