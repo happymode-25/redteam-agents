@@ -212,12 +212,23 @@ catalog that was OUT OF BAND. Pick by customer need; they're independent.
 
 | Module | Unlocks | Tools/integration | Access needed |
 |---|---|---|---|
-| **Repo/SCA mode** | 13, 24, parts of 12/15 | gitleaks (secrets), semgrep (SAST), osv-scanner (deps), checkov/tfsec (IaC), syft (SBOM) — agent triages outputs | Repo read access |
+| **Repo/SCA mode** ✅ shipped | 13, 24, parts of 12/15 | gitleaks (secrets), semgrep (SAST), osv-scanner (deps), checkov (IaC; tfsec optional alternative), syft (SBOM) — agent triages outputs | Repo read access |
 | **Cloud posture** | 7 | Public-surface first: bucket/blob exposure, metadata-endpoint checks (SSRF templates). Credentialed mode: Prowler/ScoutSuite read-only, agent summarizes | None → then read-only cloud role |
 | **Container/K8s** | 15 | trivy (images), kube-linter/kubeaudit (cluster, read-only) | Image registry / read-only kubeconfig |
 | **AD assessment** | 17 | bloodhound-python, netexec enums — all read-only collection; attack-path analysis is report-only, no abuse | Domain credentials |
 | **AI/LLM red team** | 19 | Prompt-injection harness (direct + indirect via tool output), excessive-agency tests, RAG leakage probes against in-scope AI endpoints | AI endpoint in scope |
 | **Mobile** | 14 | APK static: manifest audit, hardcoded secrets, exported components (lowest priority) | APK artifact |
+
+Repo/SCA mode shipped (Phase 3.1): `main.py --repo <path>` runs the five
+offline scanners over a local checkout with deterministic verdicts in code
+(secrets/dep/IaC confirmed, SAST suspected-only), scanner-side redaction,
+`repo.path_allowlist` root containment (no path argument exists in any
+scanner schema), the `scanner:` evidence marker, and coverage rows 13/15/24
+(+12) keyed off scanners that actually executed — with or without
+identities. 58 tests in `tests/test_repo_sca.py` (parsers against realistic
+outputs, containment, coverage honesty, scripted end-to-end pipeline).
+Pending: a lab-validated detection run in the golden suite against a planted
+vulnerable fixture repo (needs the lab gate).
 
 Hard rules for this phase: credentialed modules run **read-only** by
 default; AD/cloud abuse paths are documented in the report, never executed;

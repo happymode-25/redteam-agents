@@ -14,11 +14,16 @@ SEVERITIES = ("critical", "high", "medium", "low", "info")
 
 # Evidence standard (Phase 1.3): a 'confirmed' finding must show a
 # tool-observed response, not just a claim. We look for at least one HTTP
-# response artifact in the evidence text.
+# response artifact in the evidence text. Phase 3.1 adds 'scanner:' for
+# repo/SCA findings — a static scanner's own observed verdict (file:line +
+# rule id) is the tool-observed artifact for code defects, which have no
+# HTTP traffic by nature; the verdict ladder still forbids calling a SAST
+# pattern 'confirmed' (that stays 'suspected' — see tools/sca.py).
 _RESPONSE_MARKERS = (
     "http/1.", "http/2", "http/3", "http/0.9",   # response status line
     "status", " <- ", " <= ", " => ", " -> ",    # request->response pairs
     "< ", "resp:", "response:",
+    "scanner:",                                  # static tool verdict (repo mode)
 )
 
 

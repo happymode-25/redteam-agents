@@ -25,6 +25,8 @@ llm:
     analyst: local
     exploit: hosted
     reporter: hosted
+    repo: local                   # repo/SCA triage reads local source-tool
+                                 # output — raw code never leaves this machine
 
 scope:
   # THE authorization boundary. Nothing outside these is ever touched.
@@ -102,3 +104,17 @@ intel:
   enabled: true
   nvd_api_key_env: ""                   # optional: env var holding an NVD API key
   cache_ttl_hours: 24                   # local cache for KEV/EPSS feeds
+
+repo:
+  # Repo/SCA mode (python main.py --repo /path/to/checkout): offline scanners
+  # over a local checkout — gitleaks (secrets), semgrep (SAST, metrics off),
+  # osv-scanner (deps), checkov (IaC), syft (SBOM). No target traffic.
+  path_allowlist: []             # roots a scan may touch (symlinks resolved
+                                 # before the check); empty = any path passed
+                                 # on the CLI is accepted — the operator IS
+                                 # the authorization for a local checkout
+  osv_online: true               # PRIVACY: osv-scanner sends package
+                                 # NAMES+VERSIONS to the OSV API; false scans
+                                 # offline against the local OSV database
+  exclude: [".git", "node_modules", "vendor", "venv", ".venv",
+            "__pycache__", "dist", "build", ".tox", ".mypy_cache"]

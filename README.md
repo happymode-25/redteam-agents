@@ -115,6 +115,9 @@ python main.py --target example.com --config config.yaml --allow-active
 
 # Scripted run (CI / air-gapped lab): skip per-request prompts
 python main.py --target 10.0.0.0/24 --config config.yaml --allow-active --yes
+
+# Repo/SCA mode: assess a local checkout instead of a live target
+python main.py --repo /path/to/checkout --config config.yaml
 ```
 
 Reports land in `artifacts/`:
@@ -135,7 +138,7 @@ HUMAN REVIEW, or NEVER AUTO — and why. Summary of the mapping:
 | CHECKED every run | 5, 9, 12, 20, 25, 27 | nmap, tls_check, web_security_checks, email_auth_check, nuclei + CWE/CVSS/CVE on findings |
 | PARTIAL | 1, 4, 6, 8, 10, 23 | unauthenticated surface only; with identities configured, 4 also gets authenticated authz/data-exposure checks |
 | NEEDS CREDS | 2, 3, 11 | operator supplies accounts; with identities configured, 3 becomes CHECKED (idor_diff + bfla_check) and 2 PARTIAL (jwt_check + login verification) **only when those tools actually ran** — the matrix upgrades per run, never on configuration alone |
-| OUT OF BAND | 7, 13–19, 24, 26 | cloud creds, repos, clusters, APKs, AD, AI systems — different tooling |
+| OUT OF BAND | 7, 13–19, 24, 26 | cloud creds, repos, clusters, APKs, AD, AI systems — different tooling. **Exception: a repo checkout** — `--repo` mode moves 13 (PARTIAL), 15 (PARTIAL), 24 (CHECKED when both scanners ran) and amends 12, again only when the scanners actually executed |
 | HUMAN REVIEW | 21, 28 | organizational, not scannable |
 | NEVER AUTO | 22, 26 | DoS and active ICS testing are deliberately excluded for safety |
 
@@ -329,13 +332,40 @@ Anonymous flows keep one cookie jar per plan (steps share session state);
 identity flows run on the logged-in identity's `ScopedSession`. Rejected
 step → the flow stops with whatever was recorded.
 
+## Repo/SCA mode (Phase 3.1, sections 13/24 + parts of 12/15)
+
+`python main.py --repo /path/to/checkout` swaps the live target for a local
+repository checkout. Five offline binaries run over the tree, an analyst
+agent triages their output, and the same report renderer produces the
+findings + coverage matrix. **No network tools are registered in this mode**
+— the registry contains local scanners only, so there is nothing a model
+could aim at a remote host.
+
+| Tool | Binary | Verdict policy (computed in code) |
+|---|---|---|
+| `sbom_build` | syft | Inventory artifact (`artifacts/sbom-<stamp>.json`) + component counts. No finding |
+| `secret_scan` | gitleaks | `confirmed`, CWE-798 — the hardcoded-credential defect is proven by file:line. `--redact` is forced: matches arrive redacted BY THE SCANNER, no secret value reaches the operator, report, or model. Evidence always states **liveness was never tested** — the credential is reported, never used |
+| `dep_scan` | osv-scanner | `confirmed` with CVE/GHSA ids — version-range matches are deterministic. The one scanner that can touch the network (package names+versions → OSV API), gated by `repo.osv_online: false` for offline mode |
+| `iac_scan` | checkov | `confirmed` — the misconfiguration exists in code. No external module download |
+| `sast_scan` | semgrep | `suspected` ONLY — a static pattern is not runtime proof; the recommendation names what to exercise against a living instance. `--metrics=off` is forced in code: source never leaves this machine |
+
+Containment: the root is fixed at construction and validated against
+`repo.path_allowlist` (symlinks resolved before the check); the tools
+expose **no path argument at all**, so the LLM cannot redirect a scanner.
+A `scanner:` evidence marker extends the evidence standard to static
+verdicts (code defects have no HTTP traffic by nature), and the verdict
+ladder still forbids calling a SAST pattern `confirmed`. Missing binaries
+degrade gracefully: the agent is told up front and must say so in its
+summary — the coverage matrix keys off `used_tools`, which is recorded
+only for tools that actually executed.
+
 ## Testing
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Sixteen suites, all fully offline (no target traffic, no API keys):
+Seventeen suites, all fully offline (no target traffic, no API keys):
 
 - `tests/test_scope_adversarial.py` — the scope-escape attack suite:
   redirect escapes (out-of-scope host, unlisted IP), redirect loops,
@@ -402,8 +432,15 @@ Sixteen suites, all fully offline (no target traffic, no API keys):
   engagement with deliberately leaky inputs proves no registered secret
   survives in the LLM observation, audit log (chain still verifies),
   findings JSON, report markdown, or login error messages.
+- `tests/test_repo_sca.py` — repo/SCA mode: scanner parsers against
+  realistic gitleaks/semgrep/osv-scanner/checkov/syft outputs (verdict
+  ladder, scanner-side redaction, no secret value anywhere), forced flags
+  (`--redact`, `--metrics=off`, `--offline`), root allowlist containment
+  incl. `..` traversal, the kill-switch-only local guard, coverage honesty
+  for sections 13/15/24/12 keyed off scanners that ran, and pipeline
+  wiring end-to-end with a scripted model + scripted runner.
 
-CI runs all sixteen on every push/PR touching this directory
+CI runs all seventeen on every push/PR touching this directory
 (`.github/workflows/redteam-agents-ci.yml`).
 
 ## Legal / ethics
@@ -433,6 +470,11 @@ Works now:
   approves every individual request, plus bounded ≤ 5-worker race bursts
   (`race_burst`) with code-computed double-spend verdicts (CWE-362)
 - Hybrid hosted/local model routing per agent role
+- **Repo/SCA mode** (`--repo <path>`): gitleaks secrets (redacted by the
+  scanner, liveness untested), semgrep SAST (metrics off, suspected-only),
+  osv-scanner dependency CVEs (offline-capable), checkov IaC and a syft
+  SBOM over a local checkout — deterministic verdicts in code, root
+  allowlist containment, zero target traffic
 - Graceful degradation when an external tool is missing
 - Eval harness with record/replay cassettes + offline CI suite
 
@@ -445,3 +487,5 @@ Deliberately NOT in the MVP (roadmap):
 - Password-reset/OTP stepping with interactive operator confirmation
   (account-enumeration diffing IS automated — `account_enum` — Phase 2.3)
 - Active Directory / internal network attack paths
+- Remaining Phase 3 modules: cloud posture, container/K8s, AD, AI/LLM red
+  team, mobile — independent and read-only by design (repo/SCA shipped)

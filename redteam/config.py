@@ -124,12 +124,34 @@ class NucleiConfig:
 
 
 @dataclass
+class RepoConfig:
+    """Repo/SCA mode policy (Phase 3.1: catalog sections 13, 24, 12/15).
+
+    path_allowlist: repository roots the scanner may open (resolved with
+      symlinks followed; containment is checked in redteam.repo — empty list
+      means any absolute path the operator passes on the CLI is accepted, the
+      operator IS the authorization for a local checkout).
+    osv_online: osv-scanner sends package NAMES+VERSIONS to the OSV API —
+      same third-party-disclosure philosophy as intel.enabled; set false for
+      offline scanning against the local OSV database.
+    exclude: directories no scanner descends into (.git, node_modules, ...).
+    """
+    path_allowlist: list[str] = field(default_factory=list)
+    osv_online: bool = True
+    exclude: list[str] = field(default_factory=lambda: [
+        ".git", "node_modules", "vendor", "venv", ".venv",
+        "__pycache__", "dist", "build", ".tox", ".mypy_cache",
+    ])
+
+
+@dataclass
 class AppConfig:
     llm: LLMConfig
     scope: ScopeConfig
     safety: SafetyConfig
     intel: IntelConfig = field(default_factory=IntelConfig)
     nuclei: NucleiConfig = field(default_factory=NucleiConfig)
+    repo: RepoConfig = field(default_factory=RepoConfig)
     identities: list[IdentityConfig] = field(default_factory=list)
 
 
@@ -273,8 +295,15 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError(f"duplicate identity name: {ident.name!r}")
         seen.add(ident.name)
 
+    repo_raw = raw.get("repo") or {}
+    repo = RepoConfig(
+        path_allowlist=[str(p) for p in (repo_raw.get("path_allowlist") or [])],
+        osv_online=bool(repo_raw.get("osv_online", True)),
+        exclude=[str(e) for e in (repo_raw.get("exclude") or RepoConfig().exclude)],
+    )
+
     return AppConfig(llm=llm, scope=scope, safety=safety, intel=intel,
-                     nuclei=nuclei, identities=identities)
+                     nuclei=nuclei, repo=repo, identities=identities)
 
 
 def resolve_api_key(cfg: ProviderConfig) -> str:

@@ -14,7 +14,9 @@ from typing import Collection
 #   checked   — tested automatically on every run, unauthenticated, external
 #   partial   — some sub-classes tested; the rest need access this run lacks
 #   gated     — testable only with credentials/session (operator-supplied)
-#   external  — needs infrastructure access (cloud, cluster, repo, device)
+#   external  — needs infrastructure access (cloud, cluster, device; a repo
+#               checkout is reachable via --repo mode — rows 13/15/24 move
+#               when their scanners actually run)
 #   human     — organizational/process area, not scannable
 #   excluded  — deliberately never automated (destructive or physical risk)
 
@@ -102,19 +104,77 @@ TIER_BADGE = {
     "excluded": "NEVER AUTO",
 }
 
+# Repo/SCA mode (Phase 3.1): a run counts as a repo scan only when one of
+# these tools actually executed — used to keep row 24 honest if the repo
+# scanners were missing from PATH.
+REPO_TOOLS = {"sbom_build", "secret_scan", "sast_scan", "dep_scan", "iac_scan"}
+
 
 def render_coverage(identities: bool = False,
                     tools_used: Collection[str] = ()) -> str:
     """Render the matrix. When operator identities are configured the
     authenticated sections (2, 3, 4, 11) are re-worded — and only upgraded
     (3 -> CHECKED) when THIS RUN actually exercised the authz tools, so the
-    matrix never claims work that did not happen."""
+    matrix never claims work that did not happen. Repo/SCA rows (13, 15, 24,
+    +12's how) follow the same rule off the scanners that ran, and apply
+    regardless of identities."""
     used = set(tools_used)
 
     def row_text(row: CoverageRow) -> CoverageRow:
+        section = row.section
+        # Phase 3.1 (repo/SCA mode): upgrades keyed strictly off scanners that
+        # actually ran this run — independent of identities (repo mode has none,
+        # so these must come before the identities gate). Config presence alone
+        # changes nothing, same rule as the authz tiers.
+        if section.startswith("13."):
+            if "dep_scan" in used:
+                how = ("osv-scanner manifest/lockfile analysis (deterministic "
+                       "CVE/GHSA version-range matches)")
+                if "sbom_build" in used:
+                    how += " + syft SBOM inventory"
+                return replace(row, tier="partial",
+                               how=how + " — limited to the manifests/lockfiles "
+                                        "present in the scanned repo")
+            if "sbom_build" in used:
+                return replace(row, tier="partial",
+                               how="syft SBOM inventory (component counts only — "
+                                   "no vulnerability matching: osv-scanner was "
+                                   "unavailable or skipped this run)")
+        if section.startswith("24."):
+            sca = {"secret_scan", "sast_scan"} & used
+            vcs = ("exposed VCS metadata (.git/config, .hg, .bzr) via the "
+                   "exposed_vcs custom check") if "exposed_vcs" in used else ""
+            if sca == {"secret_scan", "sast_scan"}:
+                core = ("gitleaks secret scan (matches redacted BY THE SCANNER — "
+                        "no secret value ever reaches the report — and liveness "
+                        "is untested) + semgrep SAST (--metrics=off: source never "
+                        "leaves this machine; findings stay 'suspected' pending "
+                        "runtime proof)")
+                return replace(row, tier="checked",
+                               how=core + (f"; plus {vcs}" if vcs else ""))
+            if sca:
+                ran = "gitleaks secret scan" if "secret_scan" in sca else "semgrep SAST"
+                return replace(row, tier="partial",
+                               how=f"{ran} ran this run; the other repo scanner "
+                                   "was unavailable or skipped"
+                                   + (f"; plus {vcs}" if vcs else ""))
+            if REPO_TOOLS & used:
+                return replace(row, tier="partial",
+                               how="repo mode ran, but gitleaks/semgrep were "
+                                   "unavailable or skipped this run — secret/SAST "
+                                   "coverage did NOT happen"
+                                   + (f"; plus {vcs}" if vcs else ""))
+        if section.startswith("15.") and "iac_scan" in used:
+            return replace(row, tier="partial",
+                           how="checkov IaC misconfiguration scan over the "
+                               "repo's infrastructure-as-code (Terraform/"
+                               "CloudFormation/K8s manifests); live cluster "
+                               "state needs a read-only kubeconfig (out of band)")
+        if section.startswith("12.") and "iac_scan" in used:
+            return replace(row, how=row.how + " + checkov IaC misconfigurations "
+                                        "(infrastructure-as-code in the scanned repo)")
         if not identities:
             return row
-        section = row.section
         if section.startswith("3."):
             if {"idor_diff", "bfla_check"} & used:
                 return replace(

@@ -5,6 +5,8 @@ from .httpx import HttpxTool
 from .nmap import NmapTool
 from .nuclei import NucleiTool
 from .record import RecordFindingTool
+from .sca import (DepScanTool, IacScanTool, SastScanTool, SbomBuildTool,
+                  SecretScanTool)
 from .subfinder import SubfinderTool
 from .tls_check import TlsCheckTool
 from .web_config import WebSecurityChecksTool
@@ -14,4 +16,6 @@ __all__ = [
     "EmailAuthCheckTool", "HttpRequestTool", "HttpxTool", "NmapTool",
     "NucleiTool", "RecordFindingTool", "SubfinderTool", "TlsCheckTool",
     "WebSecurityChecksTool",
+    "DepScanTool", "IacScanTool", "SastScanTool", "SbomBuildTool",
+    "SecretScanTool",
 ]
