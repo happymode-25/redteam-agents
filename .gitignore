@@ -3,3 +3,12 @@ __pycache__/
 .venv/
 artifacts/
 config.yaml
+
+# scratch never leaves this host
+_diag.py
+
+# generated at run time by the lab; nothing planted lives here
+lab/data/
+
+# tool recordings are run artifacts, not source
+cassettes/
