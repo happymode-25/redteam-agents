@@ -313,6 +313,7 @@ class Orchestrator:
             "Produce the assessment plan."
         )
         self.state.set_note("plan", results["plan"].output)
+        self._stage_checkpoint()      # survive host restarts between stages
 
         self._emit("\n=== Stage 2/5: RECON ===")
         results["recon"] = self._agent("recon", "recon", RECON_PROMPT).run(
@@ -320,6 +321,7 @@ class Orchestrator:
             f"Assessment plan to execute (recon phases only):\n{results['plan'].output}"
         )
         self.state.set_note("recon", results["recon"].output)
+        self._stage_checkpoint()
 
         self._emit("\n=== Stage 3/5: VULN ANALYSIS ===")
         results["analysis"] = self._agent("analyst", "analyst", ANALYST_PROMPT).run(
@@ -328,6 +330,7 @@ class Orchestrator:
             "Triage, scan with nuclei, and record findings."
         )
         self.state.set_note("analysis", results["analysis"].output)
+        self._stage_checkpoint()
 
         if self.allow_active:
             self._emit("\n=== Stage 4/5: ACTIVE VERIFICATION (human-gated) ===")
@@ -339,6 +342,7 @@ class Orchestrator:
                 "Verify or disprove suspected issues with minimal read-only requests."
             )
             self.state.set_note("verification", results["verification"].output)
+            self._stage_checkpoint()
         else:
             self._emit("\n=== Stage 4/5: ACTIVE VERIFICATION skipped (--allow-active not set) ===")
 
@@ -361,6 +365,13 @@ class Orchestrator:
         if not findings:
             return "(no findings recorded yet)"
         return json.dumps(findings, indent=2, ensure_ascii=False)
+
+    def _stage_checkpoint(self) -> None:
+        """Persist progress after each pipeline stage so a host restart
+        mid-run still leaves findings/notes + tool cassettes on disk for
+        post-mortem analysis (the final report writes everything itself)."""
+        self.fixtures.save()
+        self.state.save(self.artifacts / "state-latest.json")
 
     def _write_report(self, target: str, narrative: str) -> Path:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
