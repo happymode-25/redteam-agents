@@ -1,0 +1,115 @@
+# Repo/SCA scan of THIS repository (dogfooding) — scheduled + manual.
+#
+# The scan runs offline over the checkout (syft/gitleaks/osv-scanner/semgrep/
+# checkov run when present on the runner; absent binaries are reported
+# honestly in the coverage matrix instead of faking results).
+#
+# The analyst/reporter stages need an LLM. This workflow runs only when the
+# repository has an OPENAI_API_KEY secret (or any OpenAI-compatible endpoint
+# via LLM_BASE_URL/LLM_MODEL secrets — Ollama on a self-hosted runner works
+# too). Without credentials it exits with a notice; it never fakes a result.
+#
+# Originally lived in the obsidian-os monorepo as
+# .github/workflows/redteam-repo-scan.yml (paths relative to root there);
+# moved here when this project got its own repository.
+
+name: redteam-repo-scan
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"          # Mondays 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repo-scan:
+    runs-on: ubuntu-latest
+    env:
+      HAS_CREDENTIALS: ${{ secrets.OPENAI_API_KEY != '' || secrets.LLM_BASE_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime deps
+        run: |
+          python -m pip install --disable-pip-version-check requests pyyaml
+
+      - name: Pre-flight (optional scanner binaries + credentials)
+        run: |
+          echo "Scanners on PATH (absent ones will be reported honestly):"
+          for b in syft gitleaks osv-scanner semgrep checkov; do
+            command -v "$b" >/dev/null && echo "  $b: present" || echo "  $b: absent"
+          done
+          if [ "$HAS_CREDENTIALS" != "true" ]; then
+            echo "::notice::No LLM credentials configured; repo scan skipped."
+          fi
+
+      - name: Generate CI config
+        if: env.HAS_CREDENTIALS == 'true'
+        run: |
+          cat > config.yaml <<'EOF'
+          llm:
+            hosted:
+              provider: openai_compatible
+              base_url: ${LLM_BASE_URL:-https://api.openai.com/v1}
+              api_key_env: OPENAI_API_KEY
+              model: ${LLM_MODEL:-gpt-4o-mini}
+              timeout: 240
+              max_tokens: 1200
+            local:            # unused: every role maps to hosted in CI
+              provider: openai_compatible
+              base_url: http://localhost:11434/v1
+              api_key_env: OLLAMA_API_KEY
+              model: qwen2.5:7b
+              timeout: 60
+            roles:
+              repo: hosted
+              reporter: hosted
+          scope:
+            allow_domains: []
+            allow_cidrs: []
+          safety:
+            max_agent_steps: 20
+            observation_max_chars: 6000
+            require_confirmation_for_active: true
+            artifacts_dir: ./artifacts
+            mode: record
+            cassette_dir: ./cassettes
+            runner: local
+            checks_dir: ./checks
+          nuclei:
+            severity_floor: info
+            update_policy: manual
+          intel:
+            enabled: false
+          repo:
+            path_allowlist: ["${GITHUB_WORKSPACE}"]
+            osv_online: true
+          budget:
+            max_total_tokens: 150000    # protect CI minutes
+            on_exhausted: stop
+          EOF
+          envsubst < config.yaml > config.final.yaml && mv config.final.yaml config.yaml
+
+      - name: Run repo/SCA scan
+        if: env.HAS_CREDENTIALS == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+        run: |
+          python main.py --repo . --config config.yaml --mode record
+
+      - name: Upload scan artifacts
+        uses: actions/upload-artifact@v4
+        if: always() && env.HAS_CREDENTIALS == 'true'
+        with:
+          name: redteam-repo-scan
+          path: |
+            artifacts/
+            cassettes/
+          retention-days: 30
