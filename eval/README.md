@@ -6,9 +6,14 @@ change is a measurable regression test.
 
 ## Flow
 
-1. **Start the lab** (only listens on 127.0.0.1):
+1. **Start the lab** (only listens on 127.0.0.1). Two options:
 
    ```bash
+   # (a) Docker-free: a stdlib vulnerable app with 24 planted issues
+   #     (ground truth target `lab` in targets.yaml). Needs no containers.
+   python lab/vulnserver.py                     # http://127.0.0.1:8000
+
+   # (b) Docker: the fuller Juice Shop fixture (target `juice-shop`)
    docker compose -f lab/docker-compose.yml up -d
    ```
 
@@ -16,7 +21,7 @@ change is a measurable regression test.
    is stored as a cassette:
 
    ```bash
-   python eval/run_eval.py --config config.yaml --target juice-shop --mode record
+   python eval/run_eval.py --config config.yaml --target lab --mode record
    ```
 
 3. **Replay offline** — same scorecard, zero network, zero API cost. Use

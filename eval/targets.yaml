@@ -36,3 +36,98 @@ targets:
       - id: T7
         title: "Weak TLS configuration"
         match: ["tls", "certificate"]
+
+  # Docker-free lab (lab/vulnserver.py — stdlib server, loopback only).
+  # Start it first:  python lab/vulnserver.py
+  # Regexes are anchored to web_security_checks' exact issue strings plus
+  # the obvious analyst wordings; TUNE after the first recorded run.
+  lab:
+    url: http://127.0.0.1:8000
+    scope:
+      allow_domains: [localhost]
+      allow_cidrs: ["127.0.0.0/8"]     # target URL is an IP literal
+      allow_private: true            # lab only — loopback target
+      rate_limit_per_host_per_min: 240
+    truth:
+      - id: L01
+        title: "Missing Content-Security-Policy"
+        match: ["content.security.policy", "\\bcsp\\b"]
+      - id: L02
+        title: "Missing X-Frame-Options / clickjacking protection"
+        match: ["x.frame.options", "clickjacking"]
+      - id: L03
+        title: "Missing X-Content-Type-Options (MIME sniffing)"
+        match: ["x.content.type.options", "mime sniffing"]
+      - id: L04
+        title: "Missing Referrer-Policy"
+        match: ["referrer.policy"]
+      - id: L05
+        title: "Missing HSTS"
+        match: ["\\bhsts\\b", "strict.transport.security"]
+      - id: L06
+        title: "Technology/server version disclosure"
+        match: ["technology disclosure", "x.powered.by", "basehttp",
+                "server version", "php/7.4.3"]
+      - id: L07
+        title: "Session cookie missing HttpOnly/SameSite (and set over plain HTTP)"
+        match: ["httponly", "samesite", "cookie .*lacks", "csrf exposure"]
+      - id: L08
+        title: "Login form has no CSRF token"
+        match: ["csrf token", "no csrf", "csrf protection",
+                "cross.site request forgery"]
+      - id: L09
+        title: "Permissive/reflecting CORS with credentials"
+        match: ["\\bcors\\b", "access.control.allow.origin",
+                "cross.origin data theft"]
+      - id: L10
+        title: "Directory listing on /"
+        match: ["directory listing", "index of /"]
+      - id: L11
+        title: "Exposed /.env with live-looking secrets"
+        match: ["environment file exposed", "db_password", "hunter2"]
+      - id: L12
+        title: "Exposed git metadata (/.git/HEAD, /.git/config)"
+        match: ["git repository exposed", "refs/heads/main",
+                "\\.git/(head|config)"]
+      - id: L13
+        title: "Exposed backup.zip archive"
+        match: ["backup archive exposed", "backup\\.zip"]
+      - id: L14
+        title: "Exposed /server-status page"
+        match: ["server status page exposed", "server-status"]
+      - id: L15
+        title: "Exposed cloud credentials / misc metadata (.aws, .svn, .DS_Store, actuator, phpinfo, config.php.bak)"
+        match: ["\\.aws/credentials", "aws credentials file exposed",
+                "svn metadata", "ds_store", "actuator", "config\\.php\\.bak",
+                "phpinfo"]
+      - id: L16
+        title: "Dangerous HTTP methods advertised (PUT/DELETE/TRACE)"
+        match: ["dangerous http methods", "trace enabled", "\\bxst\\b"]
+      - id: L17
+        title: "Reflected XSS on /search"
+        match: ["cross.site scripting", "reflected xss", "alert\\(1\\)"]
+      - id: L18
+        title: "SQL error disclosure on /product"
+        match: ["sql syntax", "sql injection", "\\bsqli\\b", "mysql"]
+      - id: L19
+        title: "Path traversal via /download reading the vault"
+        match: ["path traversal", "directory traversal", "vault_secret",
+                "lab_secret"]
+      - id: L20
+        title: "Open redirect on /redirect"
+        match: ["open redirect", "evil\\.example", "unvalidated redirect"]
+      - id: L21
+        title: "Admin panel reachable without authentication"
+        match: ["admin panel", "admin dashboard",
+                "admin.*no authentication", "/admin.*(200|exposed|unauthenticated|accessible)"]
+      - id: L22
+        title: "IDOR: sequential /api/profile returns PII with no auth"
+        match: ["\\bidor\\b", "insecure direct object", "predictable",
+                "api/profile", "\\bssn\\b"]
+      - id: L23
+        title: "Verbose 500 with full traceback on /crash"
+        match: ["traceback", "stack trace", "deliberate lab crash",
+                "verbose error"]
+      - id: L24
+        title: "robots.txt discloses sensitive paths"
+        match: ["robots.txt", "disallow"]

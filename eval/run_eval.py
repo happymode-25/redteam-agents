@@ -4,9 +4,14 @@ against ground truth. Produces a JSON scorecard with recall, precision
 candidates, missed truths, and call/cost stats.
 
 Usage:
-  # lab must be up: docker compose -f lab/docker-compose.yml up -d
-  python eval/run_eval.py --config config.yaml --target juice-shop --mode record
-  python eval/run_eval.py --config config.yaml --target juice-shop --mode replay
+  # lab must be up (Docker-free, loopback only):
+  #   python lab/vulnserver.py            # or docker compose for juice-shop
+  python eval/run_eval.py --config config.yaml --target lab --mode record
+  python eval/run_eval.py --config config.yaml --target lab --mode replay
+
+The process-level egress firewall (redteam.egress) wraps the run exactly
+like run_pipeline/run_repo_scan do: install before the Orchestrator,
+uninstall in finally.
 """
 
 from __future__ import annotations
@@ -24,7 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import yaml
 
 from redteam.config import ScopeConfig, load_config
+from redteam.egress import EgressFirewall
 from redteam.orchestrator import Orchestrator
+from redteam.scope import ScopeViolation
 
 
 def parse_args() -> argparse.Namespace:
@@ -104,41 +111,55 @@ def main() -> int:
     cfg = replace(cfg, scope=scope,
                   safety=replace(cfg.safety, artifacts_dir=str(eval_artifacts)))
 
-    orch = Orchestrator(cfg, allow_active=args.allow_active, auto_yes=args.yes,
-                        mode=args.mode)
-    report_path = orch.run(target["url"])
+    # scope is final now — install the process-level egress allowlist on the
+    # same policy the tools' ScopeGuard enforces.
+    try:
+        firewall = EgressFirewall.from_config(cfg)
+        firewall.install()
+    except ScopeViolation as exc:
+        print(f"Egress firewall setup error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        orch = Orchestrator(cfg, allow_active=args.allow_active,
+                            auto_yes=args.yes, mode=args.mode)
+        firewall.audit = orch.audit
+        print(firewall.describe())
+        report_path = orch.run(target["url"])
 
-    scorecard = {
-        "target": args.target,
-        "url": target["url"],
-        "mode": args.mode,
-        "ts": datetime.now().isoformat(),
-        "stats": orch.fixtures.counts,
-        "score": score([f.__dict__ for f in orch.state.sorted_findings()],
-                       target.get("truth", [])),
-    }
+        scorecard = {
+            "target": args.target,
+            "url": target["url"],
+            "mode": args.mode,
+            "ts": datetime.now().isoformat(),
+            "stats": orch.fixtures.counts,
+            "score": score([f.__dict__ for f in orch.state.sorted_findings()],
+                           target.get("truth", [])),
+        }
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    scorecard_path = eval_artifacts / f"eval-{args.target}-{stamp}.json"
-    scorecard_path.parent.mkdir(parents=True, exist_ok=True)
-    scorecard_path.write_text(json.dumps(scorecard, indent=2), encoding="utf-8")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        scorecard_path = eval_artifacts / f"eval-{args.target}-{stamp}.json"
+        scorecard_path.parent.mkdir(parents=True, exist_ok=True)
+        scorecard_path.write_text(json.dumps(scorecard, indent=2),
+                                  encoding="utf-8")
 
-    s = scorecard["score"]
-    print("\n=== EVAL SCORECARD ===")
-    print(f"target:    {args.target} ({target['url']})  mode={args.mode}")
-    print(f"recall:    {s['truth_matched']}/{s['truth_items']} = {s['recall']:.0%}")
-    print(f"precision: {s['findings_matched']}/{s['findings_total']} findings match truth"
-          + (f" (candidate precision {s['precision_candidate']:.0%})"
-             if s["precision_candidate"] is not None else ""))
-    if s["missed_truth"]:
-        print(f"missed:    {', '.join(s['missed_truth'])}")
-    if s["false_positive_candidates"]:
-        print(f"FP candidates (confirmed, unmatched): "
-              f"{len(s['false_positive_candidates'])}")
-    print(f"calls:     {orch.fixtures.counts}")
-    print(f"report:    {report_path}")
-    print(f"scorecard: {scorecard_path}")
-    return 0
+        s = scorecard["score"]
+        print("\n=== EVAL SCORECARD ===")
+        print(f"target:    {args.target} ({target['url']})  mode={args.mode}")
+        print(f"recall:    {s['truth_matched']}/{s['truth_items']} = {s['recall']:.0%}")
+        print(f"precision: {s['findings_matched']}/{s['findings_total']} findings match truth"
+              + (f" (candidate precision {s['precision_candidate']:.0%})"
+                 if s["precision_candidate"] is not None else ""))
+        if s["missed_truth"]:
+            print(f"missed:    {', '.join(s['missed_truth'])}")
+        if s["false_positive_candidates"]:
+            print(f"FP candidates (confirmed, unmatched): "
+                  f"{len(s['false_positive_candidates'])}")
+        print(f"calls:     {orch.fixtures.counts}")
+        print(f"report:    {report_path}")
+        print(f"scorecard: {scorecard_path}")
+        return 0
+    finally:
+        firewall.uninstall()
 
 
 if __name__ == "__main__":
