@@ -1,18 +1,18 @@
-# Detached eval daemon: survives opencode/server restarts because Windows
+﻿# Detached eval daemon: survives opencode/server restarts because Windows
 # Task Scheduler parents it, not the coding agent's shell.
 #
 # Loop: ensure Ollama serve + lab vulnserver are listening, run the eval,
 # stop when a fresh scorecard JSON appears; otherwise retry (a killed run's
 # stage checkpoints still persist cassettes + state-latest.json).
-$log     = "C:\dev\obsidian-os\redteam-agents\artifacts\eval_daemon.log"
-$scoreDir= "C:\dev\obsidian-os\redteam-agents\artifacts\eval\lab"
-$root    = "C:\dev\obsidian-os\redteam-agents"
+$log     = "C:\dev\redteam-agents\artifacts\eval_daemon.log"
+$scoreDir= "C:\dev\redteam-agents\artifacts\eval\lab"
+$root    = "C:\dev\redteam-agents"
 $ollama  = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe"
 
 function Log($m){ Add-Content -Path $log -Value ("[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m) }
 
 # crude single-instance lock: refuse if a marker younger than 6h exists
-$lock = "C:\dev\obsidian-os\redteam-agents\artifacts\eval_daemon.lock"
+$lock = "C:\dev\redteam-agents\artifacts\eval_daemon.lock"
 if (Test-Path $lock) {
     $age = (Get-Date) - (Get-Item $lock).LastWriteTime
     if ($age.TotalHours -lt 6) { Log "another daemon instance looks active (lock age $([int]$age.TotalMinutes) min) - exiting"; exit 0 }
@@ -44,7 +44,7 @@ for ($i = 1; $i -le 8 -and -not $up; $i++) {
         }
 
         Log "launching eval (record mode)"
-        # Task Scheduler starts us in system32 — pin the eval's CWD to the
+        # Task Scheduler starts us in system32 â€” pin the eval's CWD to the
         # project root (run_eval, config and artifacts paths are relative).
         Push-Location $root
         try {
@@ -72,3 +72,4 @@ for ($i = 1; $i -le 8 -and -not $up; $i++) {
 }
 Remove-Item $lock -ErrorAction SilentlyContinue
 Log "=== daemon end (done=$up) ==="
+
