@@ -118,3 +118,55 @@ repo:
                                  # offline against the local OSV database
   exclude: [".git", "node_modules", "vendor", "venv", ".venv",
             "__pycache__", "dist", "build", ".tox", ".mypy_cache"]
+
+# ---------------------------------------------------------------------------
+# Phase 3 modules (catalog sections 7, 14, 15, 17, 19). Every tool below
+# registers ONLY when its input is configured, and its schema is argument-
+# free — the model cannot redirect it. Configuring a module does not change
+# any coverage claim: the coverage matrix upgrades a row only when the tool
+# actually ran.
+# ---------------------------------------------------------------------------
+
+#k8s:
+  # Container/Kubernetes module (section 15): trivy image scan, kube-linter
+  # manifest linting, and a READ-ONLY cluster audit via kubeconfig.
+#  image: ""                     # e.g. nginx:1.25 (image_scan registers when set)
+#  lint_dir: ""                  # directory of K8s manifests for kube-linter
+#  kubeconfig: ""                # path for kubeaudit (cluster API, read-only)
+#  context: ""                   # kubeconfig context ("" = current)
+
+#ai:
+  # AI/LLM endpoint module (section 19): unauthenticated discovery + a fixed
+  # prompt-probe battery. The endpoint must ALSO be inside scope.allow_domains.
+#  endpoint: ""                  # e.g. https://ai.shop.test/v1 (http(s) required)
+#  auth_env: ""                  # env var NAME of its bearer token; the var
+                                 # must be set when this config loads (fail
+                                 # closed) and its value is redacted everywhere
+#  model: ""                     # model id for prompt_probe (server may ignore)
+#  timeout: 60
+
+#cloud:
+  # Cloud posture module (section 7): storage-bucket exposure probes over
+  # operator-derived names (scope-checked per URL), plus offline parsing of a
+  # local scanner report.
+#  org_hints: []                 # e.g. [acme, acme-corp] -> bucket candidates
+#  report_path: ""               # local prowler/scout JSON to parse offline
+#  report_kind: ""               # prowler | scout (required with report_path)
+#  timeout: 20
+
+#ad:
+  # Active Directory module (section 17): passive collection + attack-path
+  # ANALYSIS. No path is ever executed; credentials are never in this file
+  # (bloodhound-python uses the ambient Kerberos ticket / environment).
+#  collect: false                # operator gate for ad_collect (network reads)
+#  dc_ip: ""                     # domain controller (required with collect)
+#  domain: ""                    # AD domain (required with collect)
+#  analyze_report: ""            # BloodHound graph (zip/JSON dir) for ad_analyze
+#  max_depth: 8                  # attack-path depth cap for ad_analyze
+
+#mobile:
+  # Mobile artifact module (section 14) — fully offline static analysis of
+  # the operator's own artifact.
+#  manifest_path: ""             # AndroidManifest.xml for manifest_audit
+#  apk_path: ""                  # APK for apk_badging (needs aapt2 on PATH)
+#  decompiled_dir: ""            # decompiled sources for decompile_secrets

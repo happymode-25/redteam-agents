@@ -25,6 +25,7 @@ from .agents.base import Agent, AgentResult
 from .agents.reporter import REPORTER_PROMPT
 from .audit import AuditLog
 from .config import AppConfig
+from .egress import EgressFirewall
 from .fixtures import FixtureManager, FixtureProvider, FixtureTool
 from .llm import Router
 from .report import render_report
@@ -272,20 +273,31 @@ class RepoScanner:
 def run_repo_scan(cfg: AppConfig, root: str | Path,
                   mode: str | None = None) -> Path:
     try:
-        scanner = RepoScanner(cfg, root, mode=mode)
+        firewall = EgressFirewall.from_config(cfg)
+        firewall.install()
     except ScopeViolation as exc:
-        # raised by root/allowlist validation during construction
-        print(f"\nScope violation on repo root: {exc}", file=sys.stderr)
+        print(f"\nEgress firewall setup error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     try:
-        return scanner.run()
-    except KillSwitchEngaged:
-        scanner._emit("\nKill switch engaged. Writing partial report...")
-        return scanner._write_report("Repo scan aborted by kill switch. Partial report.")
-    except ScopeViolation as exc:
-        scanner._emit(f"\nScope violation: {exc}")
-        raise SystemExit(2) from exc
-    except KeyboardInterrupt:
-        scanner.guard.kill.trip()
-        scanner._emit("\nInterrupted. Writing partial report...")
-        return scanner._write_report("Repo scan interrupted by operator. Partial report.")
+        try:
+            scanner = RepoScanner(cfg, root, mode=mode)
+        except ScopeViolation as exc:
+            # raised by root/allowlist validation during construction
+            print(f"\nScope violation on repo root: {exc}", file=sys.stderr)
+            raise SystemExit(2) from exc
+        firewall.audit = scanner.audit
+        scanner._emit(firewall.describe())
+        try:
+            return scanner.run()
+        except KillSwitchEngaged:
+            scanner._emit("\nKill switch engaged. Writing partial report...")
+            return scanner._write_report("Repo scan aborted by kill switch. Partial report.")
+        except ScopeViolation as exc:
+            scanner._emit(f"\nScope violation: {exc}")
+            raise SystemExit(2) from exc
+        except KeyboardInterrupt:
+            scanner.guard.kill.trip()
+            scanner._emit("\nInterrupted. Writing partial report...")
+            return scanner._write_report("Repo scan interrupted by operator. Partial report.")
+    finally:
+        firewall.uninstall()

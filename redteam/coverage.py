@@ -173,6 +173,81 @@ def render_coverage(identities: bool = False,
         if section.startswith("12.") and "iac_scan" in used:
             return replace(row, how=row.how + " + checkov IaC misconfigurations "
                                         "(infrastructure-as-code in the scanned repo)")
+        # Phase 3 modules (7/14/15/17/19): same honesty rule — configuring a
+        # module changes nothing; only tools that actually ran upgrade a row.
+        if section.startswith("7.") and (
+                {"bucket_exposure", "cloud_posture_report"} & used):
+            ran = []
+            if "bucket_exposure" in used:
+                ran.append("bucket_exposure (anonymous object-listing probes "
+                           "over operator-hinted storage names — every URL "
+                           "scope-guarded before the request)")
+            if "cloud_posture_report" in used:
+                ran.append("cloud_posture_report (offline parse of a local "
+                           "prowler/scout report — the cloud itself was NOT "
+                           "re-checked this run)")
+            return replace(row, tier="partial",
+                           how="; ".join(ran) + " — IAM/policy/asset-state "
+                               "coverage still needs a credentialed cloud "
+                               "scanner")
+        if section.startswith("14.") and (
+                {"manifest_audit", "apk_badging", "decompile_secrets"} & used):
+            ran = []
+            if "manifest_audit" in used:
+                ran.append("manifest_audit (exported components, debuggable "
+                           "flag, cleartext traffic, permission list)")
+            if "apk_badging" in used:
+                ran.append("apk_badging (aapt2 metadata: version, SDK levels, "
+                           "declared permissions)")
+            if "decompile_secrets" in used:
+                ran.append("decompile_secrets (hardcoded-secret scan over the "
+                           "decompiled sources)")
+            return replace(row, tier="partial",
+                           how="; ".join(ran) + " — static analysis of the "
+                               "supplied artifact; runtime traffic, TLS "
+                               "pinning and platform behavior need a device")
+        if section.startswith("15.") and (
+                {"image_scan", "kube_lint", "kube_audit"} & used):
+            ran = []
+            if "image_scan" in used:
+                ran.append("trivy image scan (CVE version-range matches)")
+            if "kube_lint" in used:
+                ran.append("kube-linter (manifest best-practice linting)")
+            if "kube_audit" in used:
+                ran.append("kubeaudit (read-only cluster configuration audit "
+                           "via the supplied kubeconfig)")
+            full = len(ran) == 3
+            return replace(row, tier="checked" if full else "partial",
+                           how="; ".join(ran) + ("" if full else
+                               " — the rest of the container/cluster battery "
+                               "was unavailable or skipped this run"))
+        if section.startswith("17.") and ({"ad_collect", "ad_analyze"} & used):
+            ran = []
+            if "ad_collect" in used:
+                ran.append("ad_collect (passive bloodhound-python LDAP/Global "
+                           "Catalog reads against the configured DC — no "
+                           "credential harvesting, no attack execution)")
+            if "ad_analyze" in used:
+                ran.append("ad_analyze (deterministic attack-path analysis of "
+                           "the supplied graph — paths are reported, never "
+                           "executed)")
+            return replace(row, tier="partial",
+                           how="; ".join(ran) + " — no attack path is ever "
+                               "executed; exploitation stays manual")
+        if section.startswith("19.") and (
+                {"ai_endpoint_probe", "prompt_probe"} & used):
+            ran = []
+            if "ai_endpoint_probe" in used:
+                ran.append("ai_endpoint_probe (unauthenticated discovery: "
+                           "model inventory, health endpoints)")
+            if "prompt_probe" in used:
+                ran.append("prompt_probe (fixed battery: direct override, "
+                           "system-prompt extraction, indirect injection, "
+                           "excessive agency — verdicts scored in code)")
+            return replace(row, tier="partial",
+                           how="; ".join(ran) + " — model-layer risks "
+                               "(training-data extraction, model theft, "
+                               "supply chain) remain out of scope")
         if not identities:
             return row
         if section.startswith("3."):

@@ -145,6 +145,79 @@ class RepoConfig:
 
 
 @dataclass
+class K8sConfig:
+    """Container/Kubernetes module (catalog section 15).
+
+    Each tool registers only when its input is set; every schema is
+    argument-free, so the model cannot redirect them. kubeaudit talks to
+    the cluster API read-only through the supplied kubeconfig.
+    """
+    image: str = ""           # trivy target image
+    lint_dir: str = ""        # kube-linter target directory
+    kubeconfig: str = ""      # kubeaudit target (cluster API, read-only)
+    context: str = ""         # kubeconfig context (default/current)
+
+
+@dataclass
+class AIConfig:
+    """AI/LLM endpoint module (catalog section 19).
+
+    endpoint must also be inside scope — probes pass the ScopeGuard like
+    any other target. auth_env names an ENV VAR that must be set at load
+    time (fail closed: probing unauthenticated when auth was configured
+    could fabricate an exposure finding). The token is registered with the
+    redactor the moment the tool is constructed.
+    """
+    endpoint: str = ""        # base URL of the AI system under test
+    auth_env: str = ""        # env var NAME holding its bearer token
+    model: str = ""           # model id for prompt_probe (server may ignore)
+    timeout: int = 60
+
+
+@dataclass
+class CloudConfig:
+    """Cloud posture module (catalog section 7).
+
+    org_hints: organization/product names -> derived storage-bucket
+      candidates; every URL passes the scope guard before the request.
+    report_path + report_kind ('prowler'|'scout'): a LOCAL scanner report
+      parsed offline — the cloud itself is not re-checked this run, and
+      the report path never becomes an LLM argument.
+    """
+    org_hints: list[str] = field(default_factory=list)
+    report_path: str = ""
+    report_kind: str = ""
+    timeout: int = 20
+
+
+@dataclass
+class ADConfig:
+    """Active Directory module (catalog section 17).
+
+    collect: explicit operator gate for ad_collect (passive
+      bloodhound-python LDAP/Global-Catalog reads against dc_ip/domain;
+      ambient Kerberos credentials only — this config never carries
+      usernames or passwords).
+    analyze_report: operator-supplied BloodHound graph for ad_analyze
+      (attack-path analysis; paths are reported, never executed).
+    """
+    collect: bool = False
+    dc_ip: str = ""
+    domain: str = ""
+    analyze_report: str = ""
+    max_depth: int = 8
+
+
+@dataclass
+class MobileConfig:
+    """Mobile artifact module (catalog section 14) — all offline:
+    paths to the operator's AndroidManifest.xml / APK / decompiled tree."""
+    manifest_path: str = ""
+    apk_path: str = ""
+    decompiled_dir: str = ""
+
+
+@dataclass
 class AppConfig:
     llm: LLMConfig
     scope: ScopeConfig
@@ -153,6 +226,11 @@ class AppConfig:
     nuclei: NucleiConfig = field(default_factory=NucleiConfig)
     repo: RepoConfig = field(default_factory=RepoConfig)
     identities: list[IdentityConfig] = field(default_factory=list)
+    k8s: K8sConfig = field(default_factory=K8sConfig)
+    ai: AIConfig = field(default_factory=AIConfig)
+    cloud: CloudConfig = field(default_factory=CloudConfig)
+    ad: ADConfig = field(default_factory=ADConfig)
+    mobile: MobileConfig = field(default_factory=MobileConfig)
 
 
 def _provider(data: dict, name: str) -> ProviderConfig:
@@ -302,8 +380,68 @@ def load_config(path: str | Path) -> AppConfig:
         exclude=[str(e) for e in (repo_raw.get("exclude") or RepoConfig().exclude)],
     )
 
+    k8s_raw = raw.get("k8s") or {}
+    k8s = K8sConfig(
+        image=str(k8s_raw.get("image", "")),
+        lint_dir=str(k8s_raw.get("lint_dir", "")),
+        kubeconfig=str(k8s_raw.get("kubeconfig", "")),
+        context=str(k8s_raw.get("context", "")),
+    )
+
+    ai_raw = raw.get("ai") or {}
+    ai = AIConfig(
+        endpoint=str(ai_raw.get("endpoint", "")).rstrip("/"),
+        auth_env=str(ai_raw.get("auth_env", "")),
+        model=str(ai_raw.get("model", "")),
+        timeout=int(ai_raw.get("timeout", 60)),
+    )
+    if ai.endpoint and not ai.endpoint.startswith(("http://", "https://")):
+        raise ValueError(f"ai.endpoint must be http(s), got {ai.endpoint!r}")
+    if ai.auth_env and not os.environ.get(ai.auth_env):
+        raise ValueError(
+            f"ai.auth_env names {ai.auth_env!r} but that environment "
+            "variable is not set — refusing to run the AI probes "
+            "unauthenticated when auth was configured"
+        )
+
+    cloud_raw = raw.get("cloud") or {}
+    cloud = CloudConfig(
+        org_hints=[str(h) for h in (cloud_raw.get("org_hints") or [])],
+        report_path=str(cloud_raw.get("report_path", "")),
+        report_kind=str(cloud_raw.get("report_kind", "")).lower(),
+        timeout=int(cloud_raw.get("timeout", 20)),
+    )
+    if bool(cloud.report_path) != bool(cloud.report_kind):
+        raise ValueError(
+            "cloud.report_path and cloud.report_kind must be set together "
+            f"(got path={cloud.report_path!r} kind={cloud.report_kind!r})"
+        )
+    if cloud.report_kind and cloud.report_kind not in ("prowler", "scout"):
+        raise ValueError(
+            f"cloud.report_kind must be prowler|scout, got {cloud.report_kind!r}"
+        )
+
+    ad_raw = raw.get("ad") or {}
+    ad = ADConfig(
+        collect=bool(ad_raw.get("collect", False)),
+        dc_ip=str(ad_raw.get("dc_ip", "")),
+        domain=str(ad_raw.get("domain", "")),
+        analyze_report=str(ad_raw.get("analyze_report", "")),
+        max_depth=int(ad_raw.get("max_depth", 8)),
+    )
+    if ad.collect and not (ad.dc_ip and ad.domain):
+        raise ValueError("ad.collect requires ad.dc_ip and ad.domain")
+
+    mobile_raw = raw.get("mobile") or {}
+    mobile = MobileConfig(
+        manifest_path=str(mobile_raw.get("manifest_path", "")),
+        apk_path=str(mobile_raw.get("apk_path", "")),
+        decompiled_dir=str(mobile_raw.get("decompiled_dir", "")),
+    )
+
     return AppConfig(llm=llm, scope=scope, safety=safety, intel=intel,
-                     nuclei=nuclei, repo=repo, identities=identities)
+                     nuclei=nuclei, repo=repo, identities=identities,
+                     k8s=k8s, ai=ai, cloud=cloud, ad=ad, mobile=mobile)
 
 
 def resolve_api_key(cfg: ProviderConfig) -> str:

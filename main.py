@@ -60,7 +60,11 @@ def main() -> int:
         print(f"Config not found: {config_path}.{hint}", file=sys.stderr)
         return 1
 
-    cfg = load_config(config_path)
+    try:
+        cfg = load_config(config_path)
+    except ValueError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return 1
 
     if args.yes and not args.allow_active:
         print("--yes has no effect without --allow-active", file=sys.stderr)

@@ -15,6 +15,7 @@ from .agents.reporter import REPORTER_PROMPT
 from .audit import AuditLog
 from .auth import SessionManager
 from .config import AppConfig
+from .egress import EgressFirewall
 from .fixtures import FixtureManager, FixtureProvider, FixtureTool
 from .llm import Router
 from .plugins import PluginTool, load_plugins
@@ -46,6 +47,14 @@ from .tools.subfinder import SubfinderTool
 from .tools.tls_check import TlsCheckTool
 from .tools.web_config import WebSecurityChecksTool
 from .tools.base import ToolRegistry
+# Phase 3 modules (catalog sections 7, 14, 15, 17, 19) — registered below
+# only when the operator configured their input.
+from .tools.ad import AdAnalyzeTool, AdCollectTool
+from .tools.ai_probe import AiEndpointProbeTool, PromptProbeTool
+from .tools.cloudposture import BucketExposureTool, CloudPostureReportTool
+from .tools.k8s import ImageScanTool, KubeAuditTool, KubeLintTool
+from .tools.mobile import (ApkBadgingTool, DecompileSecretScanTool,
+                           ManifestAuditTool)
 
 # Tools that send traffic directly at the target with attacker-shaped requests
 ACTIVE_TOOLS = {"http_request", "account_enum", "session_check",
@@ -116,6 +125,47 @@ class Orchestrator:
             WorkflowStatusTool(self.artifacts),
             RaceBurstTool(self.sessions, enabled=cfg.safety.business_logic),
         ]
+
+        # Phase 3 modules (sections 7/14/15/17/19): registered only when the
+        # operator configured their input — every schema is argument-free, so
+        # the model cannot redirect them at anything else. Config alone
+        # changes no coverage claim: only tools that RUN upgrade a row.
+        if cfg.k8s.image:
+            tools.append(ImageScanTool(cfg.k8s.image))
+        if cfg.k8s.lint_dir:
+            tools.append(KubeLintTool(cfg.k8s.lint_dir))
+        if cfg.k8s.kubeconfig:
+            tools.append(KubeAuditTool(cfg.k8s.kubeconfig,
+                                       context=cfg.k8s.context))
+        if cfg.ai.endpoint:
+            # ctor fails closed if auth_env names an unset var (also checked
+            # at load); the token is redacted the moment it is read.
+            tools.append(AiEndpointProbeTool(self.guard, cfg.ai.endpoint,
+                                             auth_env=cfg.ai.auth_env,
+                                             timeout=cfg.ai.timeout))
+            tools.append(PromptProbeTool(self.guard, cfg.ai.endpoint,
+                                         auth_env=cfg.ai.auth_env,
+                                         timeout=cfg.ai.timeout,
+                                         model=cfg.ai.model))
+        if cfg.cloud.org_hints:
+            tools.append(BucketExposureTool(self.guard, cfg.cloud.org_hints,
+                                            timeout=cfg.cloud.timeout))
+        if cfg.cloud.report_path:
+            tools.append(CloudPostureReportTool(Path(cfg.cloud.report_path),
+                                                cfg.cloud.report_kind))
+        if cfg.ad.dc_ip and cfg.ad.domain:
+            tools.append(AdCollectTool(cfg.ad.dc_ip, cfg.ad.domain,
+                                       enabled=cfg.ad.collect))
+        if cfg.ad.analyze_report:
+            tools.append(AdAnalyzeTool(Path(cfg.ad.analyze_report),
+                                       max_depth=cfg.ad.max_depth))
+        if cfg.mobile.manifest_path:
+            tools.append(ManifestAuditTool(Path(cfg.mobile.manifest_path)))
+        if cfg.mobile.apk_path:
+            tools.append(ApkBadgingTool(Path(cfg.mobile.apk_path)))
+        if cfg.mobile.decompiled_dir:
+            tools.append(DecompileSecretScanTool(
+                Path(cfg.mobile.decompiled_dir)))
 
         # custom check plugins: operator-installed code, agent-invokable
         checks_dir = Path(cfg.safety.checks_dir).resolve()
@@ -327,16 +377,27 @@ class Orchestrator:
 
 def run_pipeline(cfg: AppConfig, target: str, allow_active: bool, auto_yes: bool,
                  mode: str | None = None) -> Path:
-    orch = Orchestrator(cfg, allow_active=allow_active, auto_yes=auto_yes, mode=mode)
     try:
-        return orch.run(target)
-    except KillSwitchEngaged:
-        orch._emit("\nKill switch engaged. Writing partial report with findings so far...")
-        return orch._write_report(target, "Assessment aborted by kill switch. Partial report.")
+        firewall = EgressFirewall.from_config(cfg)
+        firewall.install()
     except ScopeViolation as exc:
-        orch._emit(f"\nScope violation on primary target: {exc}")
+        print(f"\nEgress firewall setup error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    except KeyboardInterrupt:
-        orch.guard.kill.trip()
-        orch._emit("\nInterrupted. Writing partial report...")
-        return orch._write_report(target, "Assessment interrupted by operator. Partial report.")
+    try:
+        orch = Orchestrator(cfg, allow_active=allow_active, auto_yes=auto_yes, mode=mode)
+        firewall.audit = orch.audit
+        orch._emit(firewall.describe())
+        try:
+            return orch.run(target)
+        except KillSwitchEngaged:
+            orch._emit("\nKill switch engaged. Writing partial report with findings so far...")
+            return orch._write_report(target, "Assessment aborted by kill switch. Partial report.")
+        except ScopeViolation as exc:
+            orch._emit(f"\nScope violation on primary target: {exc}")
+            raise SystemExit(2) from exc
+        except KeyboardInterrupt:
+            orch.guard.kill.trip()
+            orch._emit("\nInterrupted. Writing partial report...")
+            return orch._write_report(target, "Assessment interrupted by operator. Partial report.")
+    finally:
+        firewall.uninstall()
