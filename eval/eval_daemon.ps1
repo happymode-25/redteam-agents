@@ -4,6 +4,8 @@
 # Loop: ensure Ollama serve + lab vulnserver are listening, run the eval,
 # stop when a fresh scorecard JSON appears; otherwise retry (a killed run's
 # stage checkpoints still persist cassettes + state-latest.json).
+param([switch]$SelfTest)
+
 $log     = "C:\dev\redteam-agents\artifacts\eval_daemon.log"
 $scoreDir= "C:\dev\redteam-agents\artifacts\eval\lab"
 $root    = "C:\dev\redteam-agents"
@@ -19,6 +21,8 @@ if (Test-Path $lock) {
 }
 New-Item -Path $lock -ItemType File -Force | Out-Null
 Log "=== daemon start ==="
+
+if ($SelfTest) { Log "self-test: reached main loop successfully"; Remove-Item $lock -ErrorAction SilentlyContinue; Log "=== self-test end ==="; exit 0 }
 
 $up = $false
 for ($i = 1; $i -le 8 -and -not $up; $i++) {
