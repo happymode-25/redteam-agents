@@ -27,6 +27,7 @@ class LabServerTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        vulnserver.prepare_files()      # data/ dir + vault, as main() would
         cls.server = vulnserver.ThreadingHTTPServer(
             ("127.0.0.1", 0), vulnserver.LabHandler)
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"

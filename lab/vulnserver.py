@@ -427,6 +427,18 @@ class LabHandler(BaseHTTPRequestHandler):
         self._send(404, '{"error": "no route"}', "application/json")
 
 
+def prepare_files() -> None:
+    """Create DATA_DIR and the traversal vault. Used by main() AND by the
+    smoke tests (which start the server in-process without main() — without
+    this, a fresh checkout has no data/ dir and the traversal test would
+    404 on case-sensitive filesystems)."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    vault = LAB_DIR / "secret_vault.txt"
+    if not vault.exists():
+        vault.write_text(f"{VAULT_MARKER}\n"
+                         "tour-otp-backup: 555-0100\n", encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Vulnerable lab server (loopback only)")
     parser.add_argument("--host", default="127.0.0.1")
@@ -438,11 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("refusing to bind a non-loopback address: the planted "
                          "vulnerabilities must never be reachable off-host")
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    vault = LAB_DIR / "secret_vault.txt"
-    if not vault.exists():
-        vault.write_text(f"{VAULT_MARKER}\n"
-                         "tour-otp-backup: 555-0100\n", encoding="utf-8")
+    prepare_files()
 
     server = ThreadingHTTPServer((args.host, args.port), LabHandler)
     server.verbose = args.verbose  # type: ignore[attr-defined]
