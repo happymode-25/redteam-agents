@@ -29,8 +29,9 @@ for ($i = 1; $i -le 8 -and -not $up; $i++) {
         $ollamaUp = $false
         try { Invoke-WebRequest -Uri "http://127.0.0.1:11434/api/tags" -UseBasicParsing -TimeoutSec 4 | Out-Null; $ollamaUp = $true } catch {}
         if (-not $ollamaUp) {
-            Log "starting ollama serve"
-            Start-Process -FilePath $ollama -ArgumentList "serve" -WindowStyle Hidden
+            Log "starting ollama serve (MAX_LOADED_MODELS=1: 16GB host cannot keep both runners hot)"
+            $cmdLine = 'set OLLAMA_MAX_LOADED_MODELS=1&& "' + $ollama + '" serve'
+            Start-Process -FilePath "cmd.exe" -ArgumentList $cmdLine -WindowStyle Hidden
             Start-Sleep -Seconds 6
         }
         # lab server

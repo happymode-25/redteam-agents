@@ -30,3 +30,13 @@ pipeline viable here, both config-only:
 Expected wall-clock on this hardware for a full 5-agent lab run: roughly
 1.5–3 hours (planner/analyst/reporter dominate). With a GPU or hosted keys,
 the same config pattern maps straight to fast models.
+
+## 2026-10-25: num_ctx 16384 -> 8192
+
+Two overnight eval attempts died with a raw Ollama 500 mid-pipeline
+(planner at 22:05, analysis at 22:22). Real usage never exceeds ~4k
+tokens (compact system prompt ~1.9k + step budget), so 8192 halves
+the KV/compute footprint with no functional loss on this 16 GB host.
+Variants renamed accordingly; eval_daemon.ps1 now also starts serve
+with OLLAMA_MAX_LOADED_MODELS=1 so the 7B and 3B runners never sit
+loaded at the same time during stage transitions.
