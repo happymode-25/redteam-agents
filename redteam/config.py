@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from .budget import BudgetConfig
 from .hostnorm import normalize_domain_list
 
 
@@ -18,6 +19,10 @@ class ProviderConfig:
     api_key_env: str
     model: str
     timeout: int = 240
+    # Upper bound on generated tokens per completion (0 = provider default).
+    # Local CPU-only models need this: unbounded generation can run for many
+    # minutes past any reasonable wall-clock budget.
+    max_tokens: int = 0
 
 
 @dataclass
@@ -231,6 +236,7 @@ class AppConfig:
     cloud: CloudConfig = field(default_factory=CloudConfig)
     ad: ADConfig = field(default_factory=ADConfig)
     mobile: MobileConfig = field(default_factory=MobileConfig)
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
 
 
 def _provider(data: dict, name: str) -> ProviderConfig:
@@ -243,6 +249,7 @@ def _provider(data: dict, name: str) -> ProviderConfig:
         api_key_env=data.get("api_key_env", ""),
         model=data["model"],
         timeout=int(data.get("timeout", 240)),
+        max_tokens=int(data.get("max_tokens", 0) or 0),
     )
 
 
@@ -439,9 +446,25 @@ def load_config(path: str | Path) -> AppConfig:
         decompiled_dir=str(mobile_raw.get("decompiled_dir", "")),
     )
 
+    budget_raw = raw.get("budget") or {}
+    budget = BudgetConfig(
+        max_total_tokens=int(budget_raw.get("max_total_tokens", 0) or 0),
+        per_role={str(k): int(v) for k, v in
+                  (budget_raw.get("per_role") or {}).items()},
+        on_exhausted=str(budget_raw.get("on_exhausted", "stop")).lower(),
+    )
+    if budget.max_total_tokens < 0 or any(v < 0 for v in budget.per_role.values()):
+        raise ValueError("budget limits must be >= 0 (0 = unlimited)")
+    if budget.on_exhausted not in ("stop", "downgrade"):
+        raise ValueError(
+            "budget.on_exhausted must be stop|downgrade, "
+            f"got {budget.on_exhausted!r}"
+        )
+
     return AppConfig(llm=llm, scope=scope, safety=safety, intel=intel,
                      nuclei=nuclei, repo=repo, identities=identities,
-                     k8s=k8s, ai=ai, cloud=cloud, ad=ad, mobile=mobile)
+                     k8s=k8s, ai=ai, cloud=cloud, ad=ad, mobile=mobile,
+                     budget=budget)
 
 
 def resolve_api_key(cfg: ProviderConfig) -> str:

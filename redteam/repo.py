@@ -24,11 +24,16 @@ from pathlib import Path
 from .agents.base import Agent, AgentResult
 from .agents.reporter import REPORTER_PROMPT
 from .audit import AuditLog
+from .budget import BudgetExceeded, TokenBudget, format_usage
 from .config import AppConfig
+from .drift import (compare, load_snapshot, render_drift_markdown,
+                    save_snapshot, snapshot, snapshot_path)
 from .egress import EgressFirewall
 from .fixtures import FixtureManager, FixtureProvider, FixtureTool
+from .htmlreport import render_html
 from .llm import Router
 from .report import render_report
+from .review import load_reviews
 from .sandbox import configure_runner
 from .scope import Guard, KillSwitchEngaged, ScopeViolation
 from .state import SharedState
@@ -124,8 +129,10 @@ class RepoScanner:
         self.fixtures = FixtureManager(cfg.safety.cassette_dir, self.mode)
 
         self.state = SharedState()
+        self.budget = TokenBudget(cfg.budget)
         self.router = router or Router(cfg.llm,
-                                       wrap=lambda p: FixtureProvider(p, self.fixtures))
+                                       wrap=lambda p: FixtureProvider(p, self.fixtures),
+                                       budget=self.budget)
         self.guard = LocalScopeGuard(
             Guard.from_config(cfg.scope, self.artifacts, audit=self.audit))
         self.used_tools: set[str] = set()
@@ -251,22 +258,42 @@ class RepoScanner:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         report_path = self.artifacts / f"report-{stamp}.md"
         findings_path = self.artifacts / f"findings-{stamp}.json"
+        html_path = self.artifacts / f"report-{stamp}.html"
 
-        report_path.write_text(
-            render_report(target=str(self.root), narrative=narrative,
-                          state=self.state,
-                          identities=False,   # repo mode has no identities
-                          tools_used=self.used_tools),
-            encoding="utf-8",
+        # Phase 4: drift (repo mode scans the same checkout repeatedly), human
+        # review decisions, usage footer — same report contract as live mode.
+        state_path = snapshot_path(self.artifacts, str(self.root))
+        previous = load_snapshot(state_path)
+        current = snapshot(str(self.root), self.state.sorted_findings())
+        drift = compare(previous, current)
+        reviews = load_reviews(self.artifacts / "reviews.json")
+
+        text = render_report(
+            target=str(self.root), narrative=narrative,
+            state=self.state,
+            identities=False,   # repo mode has no identities
+            tools_used=self.used_tools,
+            usage=format_usage(None, self.budget),
+            drift_md=render_drift_markdown(
+                drift, previous_ts=(previous or {}).get("ts")),
+            reviews=reviews,
         )
+        report_path.write_text(text, encoding="utf-8")
+        html_path.write_text(render_html(text), encoding="utf-8")
+        save_snapshot(state_path, current)
         self.state.save(findings_path)
         self.fixtures.save()
         self.audit.record("run_end", actor="repo_scanner",
                           detail={"report": str(report_path),
+                                  "report_html": str(html_path),
                                   "findings": len(self.state.findings),
+                                  "drift": drift.counts,
+                                  "usage": self.budget.totals(),
                                   "used_tools": sorted(self.used_tools)})
         self._emit(f"repo scan stats: {len(self.state.findings)} finding(s), "
                    f"scanners used: {sorted(self.used_tools) or 'none'}")
+        self._emit(f"report: {report_path}")
+        self._emit(f"report (html): {html_path}")
         return report_path
 
 
@@ -292,6 +319,11 @@ def run_repo_scan(cfg: AppConfig, root: str | Path,
         except KillSwitchEngaged:
             scanner._emit("\nKill switch engaged. Writing partial report...")
             return scanner._write_report("Repo scan aborted by kill switch. Partial report.")
+        except BudgetExceeded as exc:
+            scanner._emit(f"\nToken budget exhausted: {exc}. Writing partial report...")
+            return scanner._write_report(
+                f"Repo scan stopped: {exc}. Partial report — scanners that did "
+                "not run were not assessed.")
         except ScopeViolation as exc:
             scanner._emit(f"\nScope violation: {exc}")
             raise SystemExit(2) from exc

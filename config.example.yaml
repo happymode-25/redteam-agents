@@ -60,6 +60,21 @@ safety:
   docker_image: redteam-toolchain:latest
   checks_dir: ./checks                   # custom check plugins (see README)
 
+budget:
+  # Phase 4 cost governance. Token counts are ≈ estimates (chars/4) tracked
+  # per role; the footer of every report shows the usage. 0 = unlimited.
+  # on_exhausted:
+  #   stop      — the run stops and writes a partial report (default; safe);
+  #   downgrade — hosted roles fall back to the local backend instead of
+  #               stopping (a role already local then stops the run).
+  max_total_tokens: 0
+  per_role: {}                           # e.g. planner: 60000, reporter: 40000
+  on_exhausted: stop
+
+engagement:                              # used with: python main.py --engagement <file>
+  # (see redteam/engagement.py) — separate per-customer YAML files bind a
+  # customer, a hashed authorization letter, an assessment window and a scope.
+
 identities:
   # Phase 2: test identities for authenticated checks. Secrets are referenced
   # by ENV VAR NAME only — values never appear in this file, findings,

@@ -39,6 +39,40 @@ Rules:
 """
 
 
+def _compact_tool_list(registry: ToolRegistry) -> str:
+    """One line per tool: name(args) — what it does.
+
+    The pretty-printed JSON schema dump is ~24k chars for a full registry.
+    On a CPU-only local model that is several minutes of prompt processing per
+    step, and a 4k-context model silently truncates it. This keeps every tool
+    discoverable — names, argument names/types, required vs optional, short
+    hints — at roughly a fifth of the size. Argument validation still happens
+    against the real schema when the call is parsed, so the compact form is
+    presentation only, never enforcement.
+    """
+    lines: list[str] = []
+    for schema in registry.schemas():
+        params = schema.get("parameters") or {}
+        props = params.get("properties") or {}
+        required = set(params.get("required") or [])
+        args: list[str] = []
+        for name, spec in props.items():
+            spec = spec if isinstance(spec, dict) else {}
+            ptype = str(spec.get("type") or "string")
+            hint = " ".join(str(spec.get("description") or "").split())
+            if len(hint) > 70:
+                hint = hint[:69].rstrip() + "…"
+            args.append(
+                f"{name}{'' if name in required else '?'}:{ptype}"
+                + (f' "{hint}"' if hint else "")
+            )
+        desc = " ".join(str(schema.get("description") or "").split())
+        if len(desc) > 110:
+            desc = desc[:109].rstrip() + "…"
+        lines.append(f"- {schema.get('name')}({', '.join(args)}) — {desc}")
+    return "\n".join(lines)
+
+
 @dataclass
 class AgentResult:
     agent: str
@@ -109,14 +143,21 @@ class Agent:
         self.pre_tool_hook = pre_tool_hook
         self.audit = audit
         self._tool_calls = 0
+        self._system_prompt: str | None = None
 
     def _audit(self, event: str, **fields) -> None:
         if self.audit is not None:
             self.audit.record(event, actor=self.name, **fields)
 
     def _system(self) -> str:
-        tools = json.dumps(self.registry.schemas(), indent=2, ensure_ascii=False)
-        return f"{self.system_prompt}\n\n{PROTOCOL_PREAMBLE}\n\nAvailable tools:\n{tools}"
+        if self._system_prompt is None:
+            self._system_prompt = (
+                f"{self.system_prompt}\n\n{PROTOCOL_PREAMBLE}\n\n"
+                "Available tools (name(args) — what it does; args are passed in "
+                "the JSON 'args' object, '?' marks optional, quotes are hints):\n"
+                f"{_compact_tool_list(self.registry)}"
+            )
+        return self._system_prompt
 
     def run(self, task: str) -> AgentResult:
         provider = self.router.for_role(self.role)

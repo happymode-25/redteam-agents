@@ -14,12 +14,17 @@ from .agents.recon import RECON_PROMPT
 from .agents.reporter import REPORTER_PROMPT
 from .audit import AuditLog
 from .auth import SessionManager
+from .budget import BudgetExceeded, TokenBudget, format_usage
 from .config import AppConfig
+from .drift import (compare, load_snapshot, render_drift_markdown,
+                    save_snapshot, snapshot, snapshot_path)
 from .egress import EgressFirewall
 from .fixtures import FixtureManager, FixtureProvider, FixtureTool
+from .htmlreport import render_html
 from .llm import Router
 from .plugins import PluginTool, load_plugins
 from .report import render_report
+from .review import load_reviews
 from .sandbox import configure_runner
 from .scope import Guard, KillSwitchEngaged, ScopeViolation
 from .state import SharedState
@@ -84,7 +89,10 @@ class Orchestrator:
         self.fixtures = FixtureManager(cfg.safety.cassette_dir, self.mode)
 
         self.state = SharedState()
-        self.router = Router(cfg.llm, wrap=lambda p: FixtureProvider(p, self.fixtures))
+        self.budget = TokenBudget(cfg.budget)
+        self.router = Router(cfg.llm,
+                             wrap=lambda p: FixtureProvider(p, self.fixtures),
+                             budget=self.budget)
         self.guard = Guard.from_config(cfg.scope, self.artifacts, audit=self.audit)
         # Phase 2.1: multi-identity sessions (cookie jars isolated per identity)
         self.sessions = SessionManager(cfg.identities, self.guard, audit=self.audit)
@@ -358,20 +366,40 @@ class Orchestrator:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         report_path = self.artifacts / f"report-{stamp}.md"
         findings_path = self.artifacts / f"findings-{stamp}.json"
+        html_path = self.artifacts / f"report-{stamp}.html"
 
-        report_path.write_text(
-            render_report(target=target, narrative=narrative, state=self.state,
-                          identities=bool(self.cfg.identities),
-                          tools_used=self.used_tools),
-            encoding="utf-8",
+        # Phase 4: diff against the previous snapshot for this target, apply
+        # human review decisions, and include cost-governance usage.
+        state_path = snapshot_path(self.artifacts, target)
+        previous = load_snapshot(state_path)
+        current = snapshot(target, self.state.sorted_findings())
+        drift = compare(previous, current)
+        reviews = load_reviews(self.artifacts / "reviews.json")
+
+        text = render_report(
+            target=target, narrative=narrative, state=self.state,
+            identities=bool(self.cfg.identities),
+            tools_used=self.used_tools,
+            usage=format_usage(None, self.budget),
+            drift_md=render_drift_markdown(
+                drift, previous_ts=(previous or {}).get("ts")),
+            reviews=reviews,
         )
+        report_path.write_text(text, encoding="utf-8")
+        html_path.write_text(render_html(text), encoding="utf-8")
+        save_snapshot(state_path, current)
         self.state.save(findings_path)
         self.fixtures.save()
         self.audit.record("run_end", actor="orchestrator",
                           detail={"report": str(report_path),
+                                  "report_html": str(html_path),
                                   "findings": len(self.state.findings),
+                                  "drift": drift.counts,
+                                  "usage": self.budget.totals(),
                                   "stats": self.fixtures.counts})
         self._emit(f"run stats: {self.fixtures.counts}")
+        self._emit(f"report: {report_path}")
+        self._emit(f"report (html): {html_path}")
         return report_path
 
 
@@ -392,6 +420,13 @@ def run_pipeline(cfg: AppConfig, target: str, allow_active: bool, auto_yes: bool
         except KillSwitchEngaged:
             orch._emit("\nKill switch engaged. Writing partial report with findings so far...")
             return orch._write_report(target, "Assessment aborted by kill switch. Partial report.")
+        except BudgetExceeded as exc:
+            orch._emit(f"\nToken budget exhausted: {exc}. Writing partial report...")
+            return orch._write_report(
+                target,
+                f"Assessment stopped: {exc}. Partial report — stages that did "
+                "not run were not assessed; do not read the coverage matrix as "
+                "complete.")
         except ScopeViolation as exc:
             orch._emit(f"\nScope violation on primary target: {exc}")
             raise SystemExit(2) from exc

@@ -17,7 +17,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from redteam.audit import AuditLog
 from redteam.config import load_config
+from redteam.engagement import apply_engagement, load_engagement, stamp_engagement
 from redteam.orchestrator import run_pipeline
 from redteam.repo import run_repo_scan
 from redteam.tools.base import ToolRegistry
@@ -47,6 +49,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mode", choices=["live", "record", "replay"], default=None,
                    help="Override safety.mode: live normal, record stores cassettes, "
                         "replay runs fully offline from cassettes")
+    p.add_argument("--engagement", metavar="YAML", default="",
+                   help="Engagement file: customer, authorization letter (hashed "
+                        "into the audit log), assessment window and the scope "
+                        "this run is authorized for (replaces the config scope)")
     return p.parse_args()
 
 
@@ -66,11 +72,21 @@ def main() -> int:
         print(f"Config error: {exc}", file=sys.stderr)
         return 1
 
+    eng = None
+    if args.engagement:
+        try:
+            eng = load_engagement(Path(args.engagement))
+        except ValueError as exc:
+            print(f"Engagement error: {exc}", file=sys.stderr)
+            return 1
+        cfg = apply_engagement(cfg, eng)
+        print(f"Engagement: {eng.describe()}")
+
     if args.yes and not args.allow_active:
         print("--yes has no effect without --allow-active", file=sys.stderr)
 
     if args.repo:
-        return _main_repo(cfg, args)
+        return _main_repo(cfg, args, eng)
 
     # Tool availability preflight — warn early, degrade gracefully later.
     registry = ToolRegistry([SubfinderTool(), HttpxTool(), NmapTool(), NucleiTool()])
@@ -90,6 +106,9 @@ def main() -> int:
     print(f"Active:  {'ON (human-gated)' if args.allow_active else 'OFF'}")
     print()
 
+    if eng is not None:
+        stamp_engagement(cfg, eng, AuditLog(Path(cfg.safety.artifacts_dir) / "audit.jsonl"))
+
     report_path = run_pipeline(cfg, args.target, args.allow_active, args.yes,
                                mode=args.mode)
 
@@ -98,12 +117,15 @@ def main() -> int:
     return 0
 
 
-def _main_repo(cfg, args) -> int:
+def _main_repo(cfg, args, eng=None) -> int:
     """Repo/SCA mode: local checkout, offline scanners, no target traffic."""
     root = Path(args.repo)
     if not root.exists() or not root.is_dir():
         print(f"Repo root is not a directory: {root}", file=sys.stderr)
         return 1
+
+    if eng is not None:
+        stamp_engagement(cfg, eng, AuditLog(Path(cfg.safety.artifacts_dir) / "audit.jsonl"))
 
     missing = [b for b in ("syft", "gitleaks", "osv-scanner", "semgrep", "checkov")
                if not shutil.which(b)]
